@@ -9,8 +9,8 @@ You need a server or VM with **Ubuntu 24.04** or **Debian 12/13** (a clean one i
 
 ```bash
 sudo apt install -y git
-git clone https://github.com/yaahoo77/HovrinoFacility.git
-cd HovrinoFacility
+git clone https://github.com/yaahoo77/HovrinoFacilityFixed.git
+cd HovrinoFacilityFixed
 ```
 
 **2. Run the installer:**
