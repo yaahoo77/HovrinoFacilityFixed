@@ -1,1 +1,0 @@
-import{d as e}from"./documents-o_fFc1JN.js";import{t}from"./index-BFL27KuG.js";import{t as n}from"./DocView-D7LMZ-9s.js";var r=e();function i(){let{slug:e}=t.useLoaderData();return(0,r.jsx)(n,{slug:e,goto:!1})}export{i as component};
