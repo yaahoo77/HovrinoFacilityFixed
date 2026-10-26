@@ -1,0 +1,10 @@
+[Unit]
+Description=Phone Game: watch for website requests
+
+[Path]
+PathExists=/var/lib/phonegame-web/documentation.request
+PathExists=/var/lib/phonegame-web/ending.request
+Unit=phonegame-web.service
+
+[Install]
+WantedBy=multi-user.target

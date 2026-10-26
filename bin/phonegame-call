@@ -1,0 +1,114 @@
+#!/bin/sh
+set -eu
+
+CONF=/etc/phonegame.conf
+[ -r "$CONF" ] && . "$CONF"
+PHONE=${PHONE:-PJSIP/6001}
+CALLER_ID=${CALLER_ID:-\"Phone Game\" <7000>}
+SMS_DELAY=${SMS_DELAY:-10}
+FIRST_SZYFR_DELAY=${FIRST_SZYFR_DELAY:-10}
+SZYFR_INTERVAL=${SZYFR_INTERVAL:-180}
+SZYFR_AGAIN_AFTER_HANGUP=${SZYFR_AGAIN_AFTER_HANGUP:-0}
+MAX_SZYFR_CALLS=${MAX_SZYFR_CALLS:-10}
+DOCUMENTATION_DELAY=${DOCUMENTATION_DELAY:-10}
+ENDING_DELAY=${ENDING_DELAY:-120}
+
+STATE=/var/lib/phonegame
+WEBREQ=/var/lib/phonegame-web/documentation.request
+ENDREQ=/var/lib/phonegame-web/ending.request
+SPOOL=/var/spool/asterisk/outgoing
+TMP=/var/spool/asterisk/phonegame-tmp
+
+log() { logger -t phonegame -- "$*" 2>/dev/null || true; }
+
+plan() {
+  f=$(mktemp "$TMP/call.XXXXXX")
+  cat > "$f" <<CALL
+Channel: $PHONE
+CallerID: $CALLER_ID
+WaitTime: 30
+MaxRetries: 0
+Context: phonegame
+Extension: $1
+Priority: 1
+Setvar: PG_MSG=$1
+CALL
+  chmod 644 "$f"
+  touch -d "@$(( $(date +%s) + $2 ))" "$f"
+  for old in "$SPOOL"/phonegame-"$1"-*.call; do
+    if [ -e "$old" ] && [ "$(stat -c %Y "$old")" -gt "$(date +%s)" ]; then rm -f "$old"; fi
+  done
+  mv -f "$f" "$SPOOL/phonegame-$1-$(date +%s)-$$.call"
+  log "planned $1 in $2 s"
+}
+
+count() { cat "$STATE/szyfr-count" 2>/dev/null || echo 0; }
+
+case "${1:-}" in
+  start)
+    rm -f "$SPOOL"/phonegame-*.call "$STATE/finished" "$STATE/szyfr-count" "$STATE/clue-heard" "$STATE/documentation-tries" \
+      "$STATE/ending-tries" "$STATE/ending-choice"
+    rmdir "$STATE/documentation-called" "$STATE/ending-called" 2>/dev/null || true
+    plan sms "$SMS_DELAY"
+    ;;
+  after)
+    msg=${2:-}; result=${3:-missed}
+    if [ "$msg" = ending ]; then
+      if [ "$result" = heard ]; then log "ending: the player chose $(cat "$STATE/ending-choice" 2>/dev/null || echo '?')"; exit 0; fi
+      n=$(( $(cat "$STATE/ending-tries" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$STATE/ending-tries"
+      if [ "$n" -lt 10 ]; then plan ending 30; else log "gave up on the ending call after $n tries"; fi
+      exit 0
+    fi
+    if [ "$msg" = documentation ]; then
+      n=$(( $(cat "$STATE/documentation-tries" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$STATE/documentation-tries"
+      if [ "$n" -lt 10 ]; then plan documentation 30; else log "gave up on the last call after $n tries"; fi
+      exit 0
+    fi
+    [ -e "$STATE/finished" ] && exit 0
+    case "$msg" in
+      sms)
+        if [ "$result" = heard ]; then plan szyfr "$FIRST_SZYFR_DELAY"; else plan sms "$SZYFR_INTERVAL"; fi ;;
+      szyfr)
+        n=$(( $(count) + 1 )); echo "$n" > "$STATE/szyfr-count"
+        if [ "$result" = heard ]; then next=$SZYFR_AGAIN_AFTER_HANGUP; else next=$SZYFR_INTERVAL; fi
+        if [ "$next" -le 0 ]; then log "clue heard, waiting for /documentation"
+        elif [ "$n" -ge "$MAX_SZYFR_CALLS" ]; then log "gave up after $n clue calls"
+        else plan szyfr "$next"; fi ;;
+      *) exit 1 ;;
+    esac
+    ;;
+  web)
+    if [ -e "$WEBREQ" ]; then rm -f "$WEBREQ"; "$0" documentation; fi
+    if [ -e "$ENDREQ" ]; then rm -f "$ENDREQ"; "$0" ending; fi
+    ;;
+  documentation)
+    if [ ! -e "$STATE/clue-heard" ]; then echo too_early; log "/documentation opened before the clue was heard"; exit 0; fi
+    if ! mkdir "$STATE/documentation-called" 2>/dev/null; then echo already_called; exit 0; fi
+    touch "$STATE/finished"
+    rm -f "$SPOOL"/phonegame-sms-*.call "$SPOOL"/phonegame-szyfr-*.call
+    plan documentation "$DOCUMENTATION_DELAY"
+    echo planned
+    ;;
+  ending)
+    if [ ! -d "$STATE/documentation-called" ]; then echo too_early; log "X07 part 2 opened before /documentation"; exit 0; fi
+    if ! mkdir "$STATE/ending-called" 2>/dev/null; then echo already_called; exit 0; fi
+    plan ending "$ENDING_DELAY"
+    echo planned
+    ;;
+  reset)
+    rm -f "$SPOOL"/phonegame-*.call "$STATE/finished" "$STATE/szyfr-count" "$STATE/clue-heard" "$STATE/documentation-tries" \
+      "$STATE/ending-tries" "$STATE/ending-choice"
+    rmdir "$STATE/documentation-called" "$STATE/ending-called" 2>/dev/null || true
+    log "reset"
+    ;;
+  status)
+    echo "clue calls so far: $(count)"
+    if [ -e "$STATE/clue-heard" ]; then echo "clue heard: /documentation will call"; else echo "clue not heard yet: /documentation does nothing"; fi
+    [ -e "$STATE/finished" ] && echo "player reached /documentation"
+    [ -d "$STATE/ending-called" ] && echo "player opened X07 part 2 (ending call)"
+    [ -e "$STATE/ending-choice" ] && echo "ending chosen: $(cat "$STATE/ending-choice")"
+    ls -l "$SPOOL"/phonegame-*.call 2>/dev/null || echo "no call waiting"
+    ;;
+  *)
+    echo "usage: phonegame-call start|reset|status|documentation|ending|web" >&2; exit 2 ;;
+esac
