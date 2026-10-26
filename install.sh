@@ -305,6 +305,6 @@ WARN
 esac
 cat <<DONE
 
-Website: http://$IP/   (the same address as SIP Server; the clue leads to http://$IP/documentation)
+Website: http://$IP/
 To play: when the phone app says Online, call 7000. The game hangs up and calls you back.
 DONE
